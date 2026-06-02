@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Patient {
+  id                    String   @id @db.Uuid
+  nameFirst             String   @map("name_first")
+  nameLast              String   @map("name_last")
+  dob                   String?
+  gender                String?
+  ethnicityDescription  String?  @map("ethnicity_description")
+  legalMailingAddress   String?  @map("legal_mailing_address")
+  unitDescription       String?  @map("unit_description")
+  floorDescription      String?  @map("floor_description")
+  roomDescription       String?  @map("room_description")
+  bedDescription        String?  @map("bed_description")
+  status                String?
+  admissionTime         String?  @map("admission_time")
+  dischargeTime         String?  @map("discharge_time")
+  deathTime             String?  @map("death_time")
+  email                 String?
+  phone                 String?
+  outpatient            String?
+  revBy                 String?  @map("rev_by")
+  revTime               String?  @map("rev_time")
+  onLeave               String?  @map("on_leave")
+  group                 String   @map("cohort_group")
+
+  allergies     PatientAllergy[]
+  conditions    PatientCondition[]
+  medications   PatientMedication[]
+  observations  PatientObservation[]
+
+  @@index([group])
+  @@index([nameFirst, nameLast])
+  @@map("patients")
+}
+
+model PatientAllergy {
+  id              String  @id @db.Uuid
+  patientId       String  @map("patient_id") @db.Uuid
+  allergen        String?
+  category        String?
+  clinicalStatus  String? @map("clinical_status")
+  createdBy       String? @map("created_by")
+  createdTime     String? @map("created_time")
+  onsetDate       String? @map("onset_date")
+  reactionNote    String? @map("reaction_note")
+  reactionType    String? @map("reaction_type")
+  reactionSubType String? @map("reaction_sub_type")
+  resolvedDate    String? @map("resolved_date")
+  revBy           String? @map("rev_by")
+  revTime         String? @map("rev_time")
+  severity        String?
+  type            String?
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("patient_allergies")
+}
+
+model PatientCondition {
+  id                  String  @id @db.Uuid
+  patientId           String  @map("patient_id") @db.Uuid
+  clinicalStatus      String? @map("clinical_status")
+  createdBy           String? @map("created_by")
+  createdTime         String? @map("created_time")
+  icd10Code           String? @map("icd_10_code")
+  icd10Description    String? @map("icd_10_description")
+  onsetDate           String? @map("onset_date")
+  isPrimaryDiagnosis  String? @map("is_primary_diagnosis")
+  resolvedDate        String? @map("resolved_date")
+  revBy               String? @map("rev_by")
+  revTime             String? @map("rev_time")
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("patient_conditions")
+}
+
+model PatientMedication {
+  id          String  @id @db.Uuid
+  patientId   String  @map("patient_id") @db.Uuid
+  createdTime String? @map("created_time")
+  description String?
+  directions  String?
+  genericName String? @map("generic_name")
+  narcotic    String?
+  orderTime   String? @map("order_time")
+  revTime     String? @map("rev_time")
+  rxNormId    String? @map("rx_norm_id")
+  startTime   String? @map("start_time")
+  status      String?
+  strength    String?
+  strengthUnit String? @map("strength_unit")
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("patient_medications")
+}
+
+model PatientObservation {
+  id          String  @id @db.Uuid
+  patientId   String  @map("patient_id") @db.Uuid
+  method      String?
+  recordedBy  String? @map("recorded_by")
+  recordedTime String? @map("recorded_time")
+  data        String?
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("patient_observations")
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  token     String   @unique @db.Uuid
+  group     String   @map("cohort_group")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  requestLogs RequestLog[]
+
+  @@map("sessions")
+}
+
+model RequestLog {
+  id                  String   @id @default(uuid()) @db.Uuid
+  sessionId           String   @map("session_id") @db.Uuid
+  cohort              String
+  promptVariant       String   @map("prompt_variant")
+  resolvedPatientId   String?  @map("resolved_patient_id") @db.Uuid
+  recordsRetrieved    Json     @default("[]") @map("records_retrieved")
+  rawModelOutput      String?  @map("raw_model_output") @db.Text
+  structuredResponse  Json?    @map("structured_response")
+  injectionAttempt    Boolean  @default(false) @map("injection_attempt")
+  cohortViolation     Boolean  @default(false) @map("cohort_violation")
+  latencyMs           Int      @map("latency_ms")
+  userMessage         String   @map("user_message") @db.Text
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("request_logs")
+}
