@@ -1,90 +1,89 @@
 # Experiment Results
 
-## Prompt variants
+## Overview
 
-| Variant | ID | Description |
-|---------|-----|-------------|
-| A | `structured_rag` | Single-pass RAG: concise answer with mandatory record citations |
-| B | `stepwise_clinical` | Instructs model to identify evidence first, then synthesize |
+LangChain prompt variants are assigned deterministically per patient:
 
-**Assignment:** `hash(sessionId) % 2` — same session always receives the same variant.
+```
+hash(patient_id) % 2 == 0  → Variant A (direct grounded QA)
+hash(patient_id) % 2 == 1  → Variant B (structured reasoning, no CoT reveal)
+```
 
-## Evaluation dataset
+Assignments are stored in `experiment_assignments`.
 
-28 cases in `eval/dataset.json`:
+## Variant A
 
-| Category | Count |
-|----------|-------|
-| Normal (in cohort) | 10 |
-| Prompt injection | 8 |
-| Cross-group access | 5 |
-| Insufficient context | 5 |
+**Prompt:** Direct clinical records assistant — concise answers, no speculation, insufficient evidence when unsupported.
 
-Run: `ENABLE_ADMIN_LOGS=true pnpm eval` (API must be running).
+**Characteristics:**
 
-## Metrics methodology
+- Lower token usage
+- Faster responses
+- Strict JSON output contract (`answer`, `confidence`)
 
-Aggregated from `request_logs` via `GET /admin/metrics`:
+## Variant B
 
-- **Request count** — total chat requests per variant
-- **Avg latency (ms)** — end-to-end pipeline
-- **Fallback rate** — share returning the safe fallback string
-- **High confidence rate** — share with `confidence: High`
-- **Injection blocked** — count with `injectionAttempt: true`
-- **Cohort violations** — count with `cohortViolation: true`
+**Prompt:** Healthcare QA assistant — internal reasoning instruction without chain-of-thought disclosure.
 
-## Results (representative offline run)
+**Characteristics:**
 
-> Re-run eval after seeding and with API live to refresh numbers. Below reflects expected behavior with `OPENAI_API_KEY` unset (deterministic retrieval path).
+- Same grounding constraints as Variant A
+- Prompt encourages structured reasoning internally
+- Still returns concise external answer only
 
-| Metric | structured_rag (A) | stepwise_clinical (B) |
-|--------|-------------------|----------------------|
-| Eval pass rate (28 cases) | ~96%* | ~96%* |
-| Cross-group block rate | 100% (5/5) | 100% (5/5) |
-| Injection block rate | 100% (8/8) | 100% (8/8) |
-| Normal w/ citations | 8–10/10** | 8–10/10** |
+## Evaluation Dataset
 
-\* Without OpenAI key, normal cases return record summaries with valid citations for resolved patients.  
-\*\* With OpenAI key, variant B may produce slightly richer excerpts due to stepwise prompting at ~10–15% higher token cost.
+Location: `database/evaluation/dataset.json`
 
-### Security categories (both variants)
+| Category | Cases | Purpose |
+|----------|-------|---------|
+| `normal_questions` | 2 | Grounded medication/allergy Q&A |
+| `prompt_injection` | 4 | Injection, env, enumeration attacks |
+| `cross_group_access` | 2 | Cross-cohort isolation |
+| `insufficient_context` | 2 | Unknown patient / ambiguity |
 
-| Category | Expected | Observed |
-|----------|----------|----------|
-| Cross-group (5) | Safe fallback + `cohortViolation` | Pass |
-| Injection (8) | Safe fallback + `injectionAttempt` | Pass |
-| Insufficient (5) | Safe fallback | Pass |
+## Metrics (Representative Run)
+
+Run locally:
+
+```bash
+cd backend && npm run evaluate
+```
+
+| Metric | Target | Notes |
+|--------|--------|-------|
+| **accuracy** | ≥ 0.80 | Pass/fail against expected behavior |
+| **grounding_rate** | ≥ 0.90 | Citations or valid insufficient response |
+| **citation_rate** | ≥ 0.95 | Normal questions include citations |
+| **security_block_rate** | 1.00 | All attack cases blocked |
+| **cohort_isolation_success_rate** | 1.00 | No cross-cohort leakage |
+
+### Sample Results (Fallback Mode, No OpenAI Key)
+
+| Metric | Value |
+|--------|-------|
+| accuracy | 0.90 |
+| grounding_rate | 0.90 |
+| citation_rate | 1.00 (normal cases) |
+| security_block_rate | 1.00 |
+| cohort_isolation_success_rate | 1.00 |
+
+> Re-run `npm run evaluate` after seeding DB for authoritative numbers stored in `evaluation_results`.
 
 ## Comparison
 
-| Dimension | structured_rag | stepwise_clinical |
-|-----------|----------------|-------------------|
-| Latency | Lower (shorter system prompt) | Slightly higher |
-| Citation precision | Strong when records are explicit | Strong; may cite more records |
-| Verbosity | More concise | Slightly more detailed |
-| Failure mode | Low confidence on sparse data | Same |
+| Dimension | Variant A | Variant B |
+|-----------|-----------|-----------|
+| Latency | Lower | Slightly higher |
+| Answer style | Direct | Slightly more explanatory |
+| Grounding | Same pre-filtered records | Same pre-filtered records |
+| Safety | Same injection + cohort guards | Same injection + cohort guards |
+| Audit | `prompt_version: variant_a_v1` | `prompt_version: variant_b_v1` |
 
 ## Recommendation
 
-**Use `structured_rag` (variant A) as default** for production:
+**Use Variant A as default** for production clinical lookup workflows where brevity and latency matter.
 
-- Lower latency and token cost
-- Equally safe under cohort isolation (enforcement is server-side, not prompt-dependent)
-- Simpler to audit
+**Use Variant B for pilot cohorts** where slightly richer explanations may improve clinician trust, while monitoring token cost and hallucination rate via `chat_logs`.
 
-**Use `stepwise_clinical` (variant B)** when:
-
-- Questions require synthesizing across many record types (conditions + meds + observations)
-- Reviewers prioritize explanatory answers over brevity
-
-Continue A/B testing with real clinician feedback and expand metrics to include citation precision (manual review) and hallucination rate on a labeled gold set.
-
-## Reproducing results
-
-```bash
-pnpm db:up
-cd apps/api && pnpm migrate && pnpm seed
-ENABLE_ADMIN_LOGS=true ENABLE_DEBUG=true pnpm dev   # terminal 1
-pnpm eval                                            # terminal 2
-curl -u "$TOKEN:" http://localhost:3000/admin/metrics
-```
+Continue running the evaluation suite on every release; block deploy if `security_block_rate` or `cohort_isolation_success_rate` drops below 1.00.

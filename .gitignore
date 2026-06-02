@@ -1,9 +1,7 @@
 node_modules/
 dist/
+coverage/
 .env
 *.log
-.DS_Store
 .expo/
-apps/mobile/.expo/
-eval/results.json
-coverage/
+web-build/

@@ -1,143 +1,213 @@
-# Patient Q&A AI Assistant
+# Carebrain Patient Q&A AI Assistant
 
-Production-minded prototype for cohort-scoped, grounded patient record Q&A with layered prompt-injection defenses, A/B prompt variants, and structured observability.
+Production-minded take-home assignment implementing cohort-isolated, grounded patient Q&A with prompt injection defense, audit logging, and LangChain A/B experimentation.
 
 ## Architecture
 
-```
-Expo (cohort select → chat)
-        │  Basic Auth (session token)
-        ▼
-NestJS API ──► Injection detector ──► Patient resolver (cohort-scoped)
-        │              │                      │
-        │              │                      ▼
-        │              │              PostgreSQL (patients + records)
-        │              ▼
-        └──► LangChain (variant A/B) ──► Citations + confidence
-        │
-        └──► request_logs (full audit trail)
+```mermaid
+flowchart TD
+    A[Expo App] -->|JWT Bearer| B[NestJS API]
+    B --> C[POST /cohort/select]
+    B --> D[POST /chat]
+    D --> E[JWT Verify + Extract Cohort]
+    E --> F[InjectionDetectionService]
+    F -->|blocked| G[Security Event + Audit Log]
+    F -->|allowed| H[PatientResolverService]
+    H --> I[RetrievalService with cohort filter]
+    I --> J[Cohort Guard]
+    J --> K[LangChain Variant A or B]
+    K --> L[Structured Answer + Citations + Confidence]
+    L --> M[chat_logs PostgreSQL]
+    I --> N[(PostgreSQL)]
+    M --> N
+    G --> N
 ```
 
-**Safety principle:** Cohort scope is enforced server-side from the session token on every database query. The LLM never chooses which cohort or patient to access without prior server-side resolution.
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | Expo React Native, TypeScript |
+| Backend | NestJS, TypeScript |
+| Database | PostgreSQL |
+| AI | LangChain, OpenAI |
+
+## Project Structure
+
+```
+├── backend/                 # NestJS API
+├── frontend/                # Expo React Native app
+├── database/
+│   ├── schema.sql
+│   ├── seed-from-csv.js
+│   └── evaluation/dataset.json
+├── README.md
+├── SECURITY.md
+└── EXPERIMENT_RESULTS.md
+```
 
 ## Prerequisites
 
 - Node.js 20+
-- pnpm 9+
-- Docker (for PostgreSQL)
-- OpenAI API key (optional — without it, chat returns record summaries without LLM synthesis)
+- PostgreSQL 16+
+- OpenAI API key (optional; fallback grounded responses work without it)
 
-## Quick start
+## Setup
+
+### 1. Database
+
+Install and start PostgreSQL locally, then create the database and user (one-time, run in `psql` as a superuser):
+
+```sql
+CREATE USER carebrain WITH PASSWORD 'carebrain';
+CREATE DATABASE carebrain OWNER carebrain;
+```
+
+Apply the schema and seed data:
 
 ```bash
-# Install dependencies
-pnpm install
+export DATABASE_URL=postgresql://carebrain:carebrain@localhost:5432/carebrain
+npm run db:setup
+```
 
-# Start database
-pnpm db:up
+Or run each step separately:
 
-# Configure environment
+```bash
+npm run db:schema
+npm run db:seed
+```
+
+### 2. Backend
+
+```bash
+cd backend
 cp .env.example .env
-# Edit .env with OPENAI_API_KEY if available
-
-# Migrate and seed (from repo root)
-cd apps/api
-cp ../../.env .env 2>/dev/null || true
-pnpm generate
-pnpm migrate
-pnpm seed
-cd ../..
-
-# Start API
-pnpm api:dev
-
-# In another terminal — start mobile (web)
-pnpm mobile:dev
-# Press 'w' for web, or: cd apps/mobile && pnpm web
+# Set OPENAI_API_KEY if available
+npm install
+npm run start:dev
 ```
 
-Set `EXPO_PUBLIC_API_URL=http://localhost:3000` in `apps/mobile/.env` if needed.
-
-## API
-
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `POST /sessions` | None | `{ "group": "A" \| "B" }` → `{ token, group }` |
-| `POST /chat` | Basic `<token>:` | `{ "message": "..." }` → answer, citations, confidence |
-| `GET /health` | None | Liveness |
-| `GET /admin/logs` | Basic | Recent logs (`ENABLE_ADMIN_LOGS=true`) |
-| `GET /admin/metrics` | Basic | A/B variant metrics |
-
-### Example
+### 3. Frontend
 
 ```bash
-# Create session
-TOKEN=$(curl -s -X POST http://localhost:3000/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"group":"A"}' | jq -r .token)
-
-# Ask a question
-curl -s -X POST http://localhost:3000/chat \
-  -H "Content-Type: application/json" \
-  -u "$TOKEN:" \
-  -d '{"message":"What allergies does Adolfo Ricker have?"}'
+cd frontend
+npm install
+EXPO_PUBLIC_API_URL=http://localhost:3000 npm start
 ```
+
+## Local Deployment
+
+Run against a local PostgreSQL instance with environment variables from [`backend/.env.example`](backend/.env.example):
+
+```bash
+# Backend (production build)
+cd backend
+npm run build
+npm run start:prod
+
+# Frontend
+cd frontend
+EXPO_PUBLIC_API_URL=http://localhost:3000 npm start
+```
+
+Default ports:
+
+- PostgreSQL: `localhost:5432`
+- Backend API: `localhost:3000`
+- Frontend (Expo web): `localhost:8081`
+
+## API Endpoints
+
+### POST /cohort/select
+
+Select cohort and receive JWT.
+
+```json
+{ "cohort": "A" }
+```
+
+Response:
+
+```json
+{ "access_token": "<jwt>", "cohort": "A" }
+```
+
+### POST /chat
+
+Requires `Authorization: Bearer <token>`.
+
+```json
+{ "message": "What medications is Adolfo Ricker taking?" }
+```
+
+Response:
+
+```json
+{
+  "answer": "...",
+  "citations": [{ "table": "patient_medication", "record_id": "..." }],
+  "confidence": "High",
+  "request_id": "..."
+}
+```
+
+### POST /evaluation/run
+
+Runs automated evaluation suite and stores results in `evaluation_results`.
+
+## Database Schema
+
+| Table | Purpose |
+|-------|---------|
+| `patients` | Patient demographics with cohort |
+| `patient_allergy` | Allergies (cohort denormalized) |
+| `patient_condition` | Conditions |
+| `patient_medication` | Medications |
+| `patient_observation` | Observations |
+| `chat_logs` | Full audit trail per request |
+| `security_events` | Prompt injection / cross-cohort events |
+| `evaluation_results` | Automated eval metrics |
+| `experiment_assignments` | LangChain variant A/B per patient |
+
+Every clinical table includes `cohort` and all retrieval queries filter by JWT cohort **before** LLM execution.
+
+## Testing
+
+```bash
+cd backend
+npm test
+npm run test:e2e   # requires PostgreSQL
+```
+
+Test coverage includes:
+
+- Cross-cohort isolation (A cannot access B and vice versa)
+- Prompt extraction, environment variable, and enumeration attacks
+- Insufficient evidence and ambiguous patient handling
 
 ## Evaluation
 
 ```bash
-# With API running
-ENABLE_ADMIN_LOGS=true pnpm eval
+cd backend
+npm run evaluate
 ```
 
-Dataset: 28 cases in `eval/dataset.json` (10 normal, 8 injection, 5 cross-group, 5 insufficient context).
+Metrics tracked: accuracy, grounding_rate, citation_rate, security_block_rate, cohort_isolation_success_rate.
 
-## Prompt variants (A/B)
+## Key Design Decisions
 
-| Variant | ID | Approach |
-|---------|-----|----------|
-| A | `structured_rag` | Direct RAG-style answer with mandatory citations |
-| B | `stepwise_clinical` | Stepwise evidence identification then synthesis |
+1. **Cohort from JWT only** — frontend never supplies trusted cohort context.
+2. **Pre-LLM retrieval** — model receives only pre-filtered records; no SQL/tool access.
+3. **Layered injection defense** — regex detection, security events, safe responses.
+4. **Full auditability** — every request persisted with citations and model output.
+5. **Deterministic experiments** — `hash(patient_id) % 2` assigns LangChain variant A or B.
 
-Assignment: `hash(sessionId) % 2` — deterministic per session.
-
-See [EXPERIMENT_RESULTS.md](./EXPERIMENT_RESULTS.md) for metrics and recommendation.
-
-## Security
-
-See [SECURITY.md](./SECURITY.md) for threat model and defenses.
-
-## Project structure
-
-```
-apps/api/          NestJS + Prisma + LangChain
-apps/mobile/       Expo (React Native + web)
-data/csv/          Sandbox patient CSVs
-eval/              Evaluation dataset + runner
-docker-compose.yml PostgreSQL 16
-```
-
-## Environment variables
+## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `OPENAI_API_KEY` | OpenAI key for LangChain |
-| `OPENAI_MODEL` | Model name (default: `gpt-4o-mini`) |
-| `PORT` | API port (default: 3000) |
-| `ENABLE_ADMIN_LOGS` | Enable `/admin/logs` |
-| `ENABLE_DEBUG` | Include patientId/variant in chat response |
-| `EXPO_PUBLIC_API_URL` | API URL for mobile app |
-
-## What would you improve with one additional day?
-
-- **Embedding RAG** — Chunk records and retrieve by semantic similarity for large charts
-- **CI eval gate** — Run `pnpm eval` on every PR with regression thresholds
-- **JWT sessions** — Rotating tokens with expiry instead of static UUIDs
-- **Reviewer dashboard** — UI for browsing `request_logs` and flagging violations
-- **Expanded red-team dataset** — 100+ adversarial cases with automated scoring
-- **Hosted deployment** — Railway/Render full stack with stable public URL
-
-## Live deployment
-
-_Not yet deployed._ To deploy: Railway (API + Postgres) + Expo web static export. Add URL here when available.
+| `JWT_SECRET` | JWT signing secret |
+| `OPENAI_API_KEY` | OpenAI key (optional) |
+| `OPENAI_MODEL` | Default `gpt-4o-mini` |
+| `EXPO_PUBLIC_API_URL` | Frontend API base URL |

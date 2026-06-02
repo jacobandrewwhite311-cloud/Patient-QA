@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Carebrain Patient Q&A",
+    "slug": "carebrain-patient-qa",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "carebrain",
+    "userInterfaceStyle": "light",
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-asset",
+      "expo-font"
+    ]
+  }
+}
