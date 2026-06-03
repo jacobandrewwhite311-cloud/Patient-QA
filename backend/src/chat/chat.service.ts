@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { PatientResolverService } from '../patient/patient-resolver.service';
+import { SessionContextService } from '../patient/session-context.service';
 import { RetrievalService } from '../retrieval/retrieval.service';
 import { InjectionDetectionService } from '../security/injection-detection.service';
 import { SecurityEventService } from '../security/security-event.service';
@@ -18,6 +19,7 @@ import {
 export class ChatService {
   constructor(
     private readonly patientResolver: PatientResolverService,
+    private readonly sessionContext: SessionContextService,
     private readonly retrievalService: RetrievalService,
     private readonly injectionDetection: InjectionDetectionService,
     private readonly securityEvents: SecurityEventService,
@@ -26,7 +28,11 @@ export class ChatService {
     private readonly confidenceService: ConfidenceService,
   ) {}
 
-  async handleMessage(message: string, cohort: Cohort): Promise<ChatResponse> {
+  async handleMessage(
+    message: string,
+    cohort: Cohort,
+    sessionId = 'anonymous',
+  ): Promise<ChatResponse> {
     const requestId = uuidv4();
     const detection = this.injectionDetection.detect(message, cohort);
 
@@ -61,7 +67,10 @@ export class ChatService {
       };
     }
 
-    const resolution = await this.patientResolver.resolve(message, cohort);
+    const resolution = await this.patientResolver.resolve(message, cohort, {
+      sessionId,
+      sessionLastPatientId: this.sessionContext.getLastPatientId(sessionId, cohort),
+    });
 
     if (resolution.status === 'ambiguous') {
       const response: ChatResponse = {
@@ -135,6 +144,7 @@ export class ChatService {
     }
 
     this.retrievalService.assertCohortMatch(bundle.patient.cohort, cohort);
+    this.sessionContext.setLastPatientId(sessionId, cohort, resolution.patient.patientId);
 
     const variant = await this.langChainService.getVariantForPatient(bundle.patient.patientId);
     const modelResult = await this.langChainService.generateAnswer(

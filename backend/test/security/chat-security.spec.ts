@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ChatService } from '../../src/chat/chat.service';
 import { PatientResolverService } from '../../src/patient/patient-resolver.service';
+import { SessionContextService } from '../../src/patient/session-context.service';
 import { RetrievalService } from '../../src/retrieval/retrieval.service';
 import { InjectionDetectionService } from '../../src/security/injection-detection.service';
 import { SecurityEventService } from '../../src/security/security-event.service';
@@ -24,6 +25,13 @@ describe('ChatService security integration', () => {
         {
           provide: PatientResolverService,
           useValue: { resolve: jest.fn() },
+        },
+        {
+          provide: SessionContextService,
+          useValue: {
+            getLastPatientId: jest.fn(),
+            setLastPatientId: jest.fn(),
+          },
         },
         {
           provide: RetrievalService,
@@ -76,6 +84,13 @@ describe('ChatService insufficient evidence', () => {
           provide: PatientResolverService,
           useValue: {
             resolve: jest.fn().mockResolvedValue({ status: 'not_found' }),
+          },
+        },
+        {
+          provide: SessionContextService,
+          useValue: {
+            getLastPatientId: jest.fn(),
+            setLastPatientId: jest.fn(),
           },
         },
         {

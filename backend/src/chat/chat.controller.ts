@@ -12,6 +12,6 @@ export class ChatController {
 
   @Post()
   async chat(@Body() dto: ChatMessageDto, @Req() req: Request & { user: JwtPayload }) {
-    return this.chatService.handleMessage(dto.message, req.user.cohort);
+    return this.chatService.handleMessage(dto.message, req.user.cohort, req.user.sub);
   }
 }
