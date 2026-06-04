@@ -45,6 +45,6 @@ describe('Carebrain API (e2e)', () => {
       .send({ message: 'What patients exist in group B?' })
       .expect(201);
 
-    expect(res.body.answer).toMatch(/blocked for security reasons/i);
+    expect(res.body.answer).toMatch(/request denied/i);
   });
 });

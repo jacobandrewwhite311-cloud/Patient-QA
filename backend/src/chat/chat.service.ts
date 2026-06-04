@@ -11,6 +11,7 @@ import { ConfidenceService } from './confidence.service';
 import {
   ChatResponse,
   Cohort,
+  CANNOT_DETERMINE_PATIENT_MESSAGE,
   INSUFFICIENT_EVIDENCE_MESSAGE,
   SAFE_SECURITY_RESPONSE,
 } from '../common/types';
@@ -37,6 +38,10 @@ export class ChatService {
     const detection = this.injectionDetection.detect(message, cohort);
 
     if (detection.detected) {
+      // Category-specific safe response (falls back to the generic cohort-access
+      // denial). High confidence: we are certain the request is being refused.
+      const securityAnswer = detection.response ?? SAFE_SECURITY_RESPONSE;
+
       await this.securityEvents.logEvent({
         cohort,
         requestId,
@@ -51,19 +56,21 @@ export class ChatService {
         cohort,
         userQuery: message,
         retrievedRecords: [],
-        finalAnswer: SAFE_SECURITY_RESPONSE,
-        confidence: 'Low',
+        finalAnswer: securityAnswer,
+        confidence: 'High',
         citations: [],
         injectionDetected: true,
         securityViolation: detection.severity === 'HIGH',
         rawModelOutput: null,
       });
 
+      // Security denials are intentionally exact wording — never AI-rephrased.
       return {
-        answer: SAFE_SECURITY_RESPONSE,
+        answer: securityAnswer,
         citations: [],
-        confidence: 'Low',
+        confidence: 'High',
         request_id: requestId,
+        status: 'blocked',
       };
     }
 
@@ -73,13 +80,18 @@ export class ChatService {
     });
 
     if (resolution.status === 'ambiguous') {
+      const answer = await this.langChainService.refineAnswer(
+        message,
+        'Multiple patients match your query. Please specify patient ID or full name to disambiguate.',
+      );
+
       const response: ChatResponse = {
-        answer:
-          'Multiple patients match your query. Please specify patient ID or full name to disambiguate.',
+        answer,
         citations: [],
         confidence: 'Medium',
         request_id: requestId,
         ambiguous: true,
+        status: 'ambiguous',
         matches: resolution.matches?.map((m) => ({
           patient_id: m.patientId,
           first_name: m.firstName,
@@ -101,21 +113,30 @@ export class ChatService {
     }
 
     if (resolution.status === 'not_found' || !resolution.patient) {
+      // A pronoun reference with no patient in context is a distinct case from
+      // "no such patient" — tell the user we cannot determine who they mean.
+      const baseAnswer =
+        resolution.method === 'pronoun_unresolved'
+          ? CANNOT_DETERMINE_PATIENT_MESSAGE
+          : INSUFFICIENT_EVIDENCE_MESSAGE;
+      const answer = await this.langChainService.refineAnswer(message, baseAnswer);
+
       await this.auditService.logChat({
         requestId,
         cohort,
         userQuery: message,
         retrievedRecords: [],
-        finalAnswer: INSUFFICIENT_EVIDENCE_MESSAGE,
+        finalAnswer: answer,
         confidence: 'Low',
         citations: [],
       });
 
       return {
-        answer: INSUFFICIENT_EVIDENCE_MESSAGE,
+        answer,
         citations: [],
         confidence: 'Low',
         request_id: requestId,
+        status: 'not_found',
       };
     }
 
@@ -125,21 +146,24 @@ export class ChatService {
     );
 
     if (!bundle) {
+      const answer = await this.langChainService.refineAnswer(message, INSUFFICIENT_EVIDENCE_MESSAGE);
+
       await this.auditService.logChat({
         requestId,
         cohort,
         userQuery: message,
         retrievedRecords: [],
-        finalAnswer: INSUFFICIENT_EVIDENCE_MESSAGE,
+        finalAnswer: answer,
         confidence: 'Low',
         citations: [],
       });
 
       return {
-        answer: INSUFFICIENT_EVIDENCE_MESSAGE,
+        answer,
         citations: [],
         confidence: 'Low',
         request_id: requestId,
+        status: 'not_found',
       };
     }
 
@@ -159,16 +183,20 @@ export class ChatService {
       modelResult.confidence,
     );
 
-    const answer =
+    const rawAnswer =
       confidence === 'Low' && /insufficient evidence/i.test(modelResult.answer)
         ? INSUFFICIENT_EVIDENCE_MESSAGE
         : modelResult.answer;
+
+    // Professional second-pass rephrasing (facts preserved). No-op without a key.
+    const answer = await this.langChainService.refineAnswer(message, rawAnswer);
 
     const response: ChatResponse = {
       answer,
       citations: bundle.citations,
       confidence,
       request_id: requestId,
+      status: 'answered',
     };
 
     await this.auditService.logChat({

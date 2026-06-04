@@ -80,10 +80,33 @@ async function seed() {
   for (const p of patients) {
     const cohort = p.group || 'A';
     await client.query(
-      `INSERT INTO patients (patient_id, first_name, last_name, cohort, dob, gender, status)
-       VALUES ($1, $2, $3, $4, NULLIF($5, '')::date, $6, $7)
+      `INSERT INTO patients (
+         patient_id, first_name, last_name, cohort, dob, gender, ethnicity, status,
+         unit_description, floor_description, room_description, bed_description,
+         admission_time, discharge_time
+       )
+       VALUES (
+         $1, $2, $3, $4, NULLIF($5, '')::date, $6, $7, $8,
+         $9, $10, $11, $12,
+         NULLIF($13, '')::timestamptz, NULLIF($14, '')::timestamptz
+       )
        ON CONFLICT (patient_id) DO NOTHING`,
-      [p.id, p.name_first, p.name_last, cohort, p.dob || null, p.gender || null, p.status || null],
+      [
+        p.id,
+        p.name_first,
+        p.name_last,
+        cohort,
+        p.dob || null,
+        p.gender || null,
+        p.ethnicity_description || null,
+        p.status || null,
+        p.unit_description || null,
+        p.floor_description || null,
+        p.room_description || null,
+        p.bed_description || null,
+        p.admission_time || null,
+        p.discharge_time || null,
+      ],
     );
 
     const variant = hashMod2(p.id);

@@ -9,12 +9,29 @@ CREATE TABLE IF NOT EXISTS patients (
     cohort VARCHAR(1) NOT NULL CHECK (cohort IN ('A', 'B')),
     dob DATE,
     gender VARCHAR(50),
+    ethnicity VARCHAR(255),
     status VARCHAR(50),
+    unit_description VARCHAR(255),
+    floor_description VARCHAR(255),
+    room_description VARCHAR(255),
+    bed_description VARCHAR(255),
+    admission_time TIMESTAMPTZ,
+    discharge_time TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_patients_cohort ON patients (cohort);
-CREATE INDEX idx_patients_name ON patients (cohort, LOWER(first_name), LOWER(last_name));
+-- Idempotent column adds so an already-created patients table picks up the
+-- location/admission fields without a manual drop.
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS ethnicity VARCHAR(255);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS unit_description VARCHAR(255);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS floor_description VARCHAR(255);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS room_description VARCHAR(255);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS bed_description VARCHAR(255);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS admission_time TIMESTAMPTZ;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS discharge_time TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_patients_cohort ON patients (cohort);
+CREATE INDEX IF NOT EXISTS idx_patients_name ON patients (cohort, LOWER(first_name), LOWER(last_name));
 
 CREATE TABLE IF NOT EXISTS patient_allergy (
     id UUID PRIMARY KEY,
@@ -27,7 +44,7 @@ CREATE TABLE IF NOT EXISTS patient_allergy (
     cohort VARCHAR(1) NOT NULL CHECK (cohort IN ('A', 'B'))
 );
 
-CREATE INDEX idx_patient_allergy_patient_cohort ON patient_allergy (patient_id, cohort);
+CREATE INDEX IF NOT EXISTS idx_patient_allergy_patient_cohort ON patient_allergy (patient_id, cohort);
 
 CREATE TABLE IF NOT EXISTS patient_condition (
     id UUID PRIMARY KEY,
@@ -39,7 +56,7 @@ CREATE TABLE IF NOT EXISTS patient_condition (
     cohort VARCHAR(1) NOT NULL CHECK (cohort IN ('A', 'B'))
 );
 
-CREATE INDEX idx_patient_condition_patient_cohort ON patient_condition (patient_id, cohort);
+CREATE INDEX IF NOT EXISTS idx_patient_condition_patient_cohort ON patient_condition (patient_id, cohort);
 
 CREATE TABLE IF NOT EXISTS patient_medication (
     id UUID PRIMARY KEY,
@@ -53,7 +70,7 @@ CREATE TABLE IF NOT EXISTS patient_medication (
     cohort VARCHAR(1) NOT NULL CHECK (cohort IN ('A', 'B'))
 );
 
-CREATE INDEX idx_patient_medication_patient_cohort ON patient_medication (patient_id, cohort);
+CREATE INDEX IF NOT EXISTS idx_patient_medication_patient_cohort ON patient_medication (patient_id, cohort);
 
 CREATE TABLE IF NOT EXISTS patient_observation (
     id UUID PRIMARY KEY,
@@ -64,7 +81,7 @@ CREATE TABLE IF NOT EXISTS patient_observation (
     cohort VARCHAR(1) NOT NULL CHECK (cohort IN ('A', 'B'))
 );
 
-CREATE INDEX idx_patient_observation_patient_cohort ON patient_observation (patient_id, cohort);
+CREATE INDEX IF NOT EXISTS idx_patient_observation_patient_cohort ON patient_observation (patient_id, cohort);
 
 CREATE TABLE IF NOT EXISTS chat_logs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -84,8 +101,8 @@ CREATE TABLE IF NOT EXISTS chat_logs (
     security_violation BOOLEAN NOT NULL DEFAULT FALSE
 );
 
-CREATE INDEX idx_chat_logs_cohort ON chat_logs (cohort);
-CREATE INDEX idx_chat_logs_timestamp ON chat_logs (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_logs_cohort ON chat_logs (cohort);
+CREATE INDEX IF NOT EXISTS idx_chat_logs_timestamp ON chat_logs (timestamp DESC);
 
 CREATE TABLE IF NOT EXISTS security_events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -98,7 +115,7 @@ CREATE TABLE IF NOT EXISTS security_events (
     details JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE INDEX idx_security_events_severity ON security_events (severity, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_security_events_severity ON security_events (severity, timestamp DESC);
 
 CREATE TABLE IF NOT EXISTS evaluation_results (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -118,7 +135,7 @@ CREATE TABLE IF NOT EXISTS evaluation_results (
     notes TEXT
 );
 
-CREATE INDEX idx_evaluation_results_run ON evaluation_results (run_id, category);
+CREATE INDEX IF NOT EXISTS idx_evaluation_results_run ON evaluation_results (run_id, category);
 
 CREATE TABLE IF NOT EXISTS experiment_assignments (
     patient_id UUID PRIMARY KEY REFERENCES patients (patient_id) ON DELETE CASCADE,

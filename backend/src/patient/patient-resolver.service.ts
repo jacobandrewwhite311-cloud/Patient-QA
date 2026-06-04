@@ -13,8 +13,10 @@ export interface PatientMatch {
 export type ResolutionMethod =
   | 'explicit_id'
   | 'explicit_full_name'
+  | 'single_name'
   | 'descriptive_attributes'
   | 'session_context'
+  | 'pronoun_unresolved'
   | 'safe_fallback';
 
 export interface PatientResolutionResult {
@@ -29,29 +31,45 @@ export interface PatientResolutionContext {
   sessionLastPatientId?: string | null;
 }
 
+/**
+ * Words that must never be treated as part of a patient name. Without this,
+ * a sentence-leading verb/question word pairs with the real first name
+ * (e.g. "Does Adolfo" in "Does Adolfo Ricker have allergies?") and consumes it,
+ * so the real "Adolfo Ricker" pair is never tried. Patient names in the dataset
+ * are distinctive enough that collisions with these words are not a concern.
+ */
 const STOPWORDS = new Set([
-  'a',
-  'an',
-  'about',
-  'are',
-  'for',
-  'give',
-  'how',
-  'is',
-  'me',
-  'patient',
-  'show',
-  'tell',
-  'the',
-  'their',
-  'they',
-  'what',
-  'who',
-  'with',
-  'first',
-  'last',
-  'name',
+  // articles / determiners / pronouns
+  'a', 'an', 'the', 'this', 'that', 'these', 'those', 'their', 'theirs', 'they',
+  'them', 'he', 'she', 'him', 'her', 'hers', 'his', 'its', 'it', 'my', 'our',
+  // question / auxiliary / verb words
+  'what', 'who', 'whom', 'whose', 'which', 'when', 'where', 'why', 'how',
+  'is', 'are', 'was', 'were', 'am', 'be', 'been', 'being',
+  'do', 'does', 'did', 'has', 'have', 'had',
+  'can', 'could', 'should', 'would', 'will', 'shall', 'may', 'might', 'must',
+  'show', 'tell', 'give', 'list', 'find', 'get', 'fetch', 'display', 'provide',
+  'taking', 'take', 'assigned', 'documented', 'available', 'currently',
+  // prepositions / conjunctions / fillers
+  'about', 'for', 'with', 'of', 'to', 'in', 'on', 'at', 'by', 'and', 'or',
+  'any', 'all', 'me', 'please', 'currently',
+  // clinical / field nouns (never part of a name)
+  'patient', 'patients', 'first', 'last', 'name', 'named',
+  'medication', 'medications', 'medicine', 'drug', 'drugs', 'prescription',
+  'allergy', 'allergies', 'allergic',
+  'condition', 'conditions', 'diagnosis', 'diagnoses', 'diagnosed',
+  'observation', 'observations', 'vital', 'vitals', 'reading', 'readings',
+  'blood', 'sugar', 'pressure', 'heart', 'rate', 'temperature', 'oxygen', 'pain',
+  'gender', 'sex', 'dob', 'birth', 'date', 'born',
+  'room', 'bed', 'unit', 'floor', 'ward',
+  'admission', 'admitted', 'discharge', 'discharged', 'status', 'active',
+  'inactive', 'deceased', 'latest', 'recent', 'current',
 ]);
+
+/** Phrases that indicate the user is referring back to a previously discussed patient. */
+const PRONOUN_REFERENCE_PATTERNS: RegExp[] = [
+  /\b(?:this|that|the)\s+patient\b/i,
+  /\b(?:he|she|they|him|her|them|his|hers|their|theirs)\b/i,
+];
 
 const UUID_REGEX =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
@@ -93,6 +111,22 @@ export class PatientResolverService {
     const byFullName = await this.resolveByExplicitFullName(normalized, cohort);
     if (byFullName !== null) return byFullName;
 
+    // A pronoun reference ("this patient", "the patient", "their"...) is a
+    // follow-up about the patient already in context — resolve via session and
+    // do NOT fall through to attribute search (which would mis-read words like
+    // "active" or "currently" as search filters). With no session, the patient
+    // is genuinely undeterminable.
+    if (this.hasPronounReference(normalized)) {
+      const bySessionPronoun = await this.resolveBySessionContext(sessionLastPatientId, cohort);
+      if (bySessionPronoun !== null) return bySessionPronoun;
+      return { status: 'not_found', method: 'pronoun_unresolved' };
+    }
+
+    // A single proper-noun reference ("Adolfo", "Ricker") — resolve it as a
+    // first OR last name before falling back to attribute search.
+    const bySingleName = await this.resolveBySingleName(normalized, cohort);
+    if (bySingleName !== null) return bySingleName;
+
     const byAttributes = await this.resolveByDescriptiveAttributes(normalized, cohort);
     if (byAttributes !== null) return byAttributes;
 
@@ -100,6 +134,41 @@ export class PatientResolverService {
     if (bySession !== null) return bySession;
 
     return { status: 'not_found', method: 'safe_fallback' };
+  }
+
+  private hasPronounReference(query: string): boolean {
+    return PRONOUN_REFERENCE_PATTERNS.some((pattern) => pattern.test(query));
+  }
+
+  /**
+   * Resolve a bare first- or last-name reference (no full pair). A clinician
+   * commonly types "What meds is Adolfo on?" or "Tell me about Ricker". Each
+   * capitalized, non-stopword token is matched against first AND last name;
+   * a single hit resolves, multiple hits disambiguate.
+   */
+  private async resolveBySingleName(
+    query: string,
+    cohort: Cohort,
+  ): Promise<PatientResolutionResult | null> {
+    const tokens = this.nameTokens(query).filter(
+      (t) => this.isCapitalized(t.raw) && !STOPWORDS.has(t.clean.toLowerCase()),
+    );
+    if (tokens.length === 0) return null;
+
+    const byId = new Map<string, PatientMatch>();
+    for (const token of tokens) {
+      const [byFirst, byLast] = await Promise.all([
+        this.patientRepository.findByFirstNameAndCohort(token.clean, cohort),
+        this.patientRepository.findByLastNameAndCohort(token.clean, cohort),
+      ]);
+      for (const p of [...(byFirst ?? []), ...(byLast ?? [])]) {
+        byId.set(p.patientId, this.toMatch(p));
+      }
+    }
+
+    const matches = [...byId.values()];
+    if (matches.length === 0) return null;
+    return this.withMethod(this.fromMatches(matches), 'single_name');
   }
 
   /** Priority 1: explicit patient UUID in the query. */
@@ -143,32 +212,60 @@ export class PatientResolverService {
     return { status: 'not_found', method: 'explicit_full_name' };
   }
 
+  /**
+   * Produce "first last" candidates from the query using OVERLAPPING adjacent
+   * token pairs. Overlap (rather than non-overlapping regex matches) is what
+   * lets "Adolfo Ricker" still be tried after a leading word like "Does" — the
+   * old non-overlapping scan consumed "Does Adolfo" and never reached the real
+   * name. Stopword tokens are dropped before pairing. Pairs where both tokens
+   * are capitalized (proper nouns) are tried first.
+   */
   private extractExplicitFullNameCandidates(query: string): Array<[string, string]> {
     const candidates: Array<[string, string]> = [];
     const seen = new Set<string>();
 
-    const addCandidate = (firstName: string, lastName: string) => {
+    const addCandidate = (firstName: string, lastName: string, capitalized: boolean) => {
       const key = `${firstName.toLowerCase()}|${lastName.toLowerCase()}`;
       if (seen.has(key)) return;
       if (STOPWORDS.has(firstName.toLowerCase()) || STOPWORDS.has(lastName.toLowerCase())) return;
       seen.add(key);
-      candidates.push([firstName, lastName]);
+      candidates.push([firstName, lastName, capitalized] as unknown as [string, string]);
     };
 
+    // Highest priority: an explicit "full name / patient name <First> <Last>" label.
     const explicitLabel = query.match(
-      /(?:full\s+name|patient\s+name)\s+([A-Za-z][A-Za-z'-]+)\s+([A-Za-z][A-Za-z'-]+)/i,
+      /(?:full\s+name|patient\s+name|patient\s+named)\s+([A-Za-z][A-Za-z'-]+)\s+([A-Za-z][A-Za-z'-]+)/i,
     );
-    if (explicitLabel) addCandidate(explicitLabel[1], explicitLabel[2]);
+    if (explicitLabel) addCandidate(explicitLabel[1], explicitLabel[2], true);
 
-    for (const match of query.matchAll(/\b([A-Z][a-z]+)\s+([A-Z][a-z]+)\b/g)) {
-      addCandidate(match[1], match[2]);
+    const tokens = this.nameTokens(query);
+    for (let i = 0; i < tokens.length - 1; i += 1) {
+      const a = tokens[i];
+      const b = tokens[i + 1];
+      const capitalized = this.isCapitalized(a.raw) && this.isCapitalized(b.raw);
+      addCandidate(a.clean, b.clean, capitalized);
     }
 
-    for (const match of query.matchAll(/\b([A-Za-z][A-Za-z'-]+)\s+([A-Za-z][A-Za-z'-]+)\b/g)) {
-      addCandidate(match[1], match[2]);
-    }
+    // Try capitalized proper-noun pairs before all-lowercase ones.
+    return (candidates as unknown as Array<[string, string, boolean]>)
+      .sort((x, y) => Number(y[2]) - Number(x[2]))
+      .map(([first, last]) => [first, last] as [string, string]);
+  }
 
-    return candidates;
+  /** Split a query into name-shaped tokens, stripping punctuation and possessives. */
+  private nameTokens(query: string): Array<{ raw: string; clean: string }> {
+    return query
+      .split(/\s+/)
+      .map((rawToken) => {
+        const raw = rawToken.replace(/^[^A-Za-z]+|[^A-Za-z'-]+$/g, '');
+        const clean = raw.replace(/'s$/i, '').replace(/['-]+$/g, '');
+        return { raw, clean };
+      })
+      .filter((t) => /^[A-Za-z][A-Za-z'-]*$/.test(t.clean) && t.clean.length >= 2);
+  }
+
+  private isCapitalized(word: string): boolean {
+    return /^[A-Z][a-z'-]*$/.test(word);
   }
 
   /** Priority 3: gender, DOB, status, clinical keywords, or partial name signals. */
@@ -226,18 +323,18 @@ export class PatientResolverService {
     const signals: ReturnType<typeof this.extractDescriptiveSignals> = [];
 
     const firstOnly = query.match(/(?:first\s+name|patient)\s+([A-Za-z][A-Za-z'-]+)/i);
-    if (firstOnly) {
+    if (firstOnly && !STOPWORDS.has(firstOnly[1].toLowerCase())) {
       signals.push({ type: 'first_name', value: firstOnly[1] });
     }
 
     const lastOnly = query.match(/(?:last\s+name)\s+([A-Za-z][A-Za-z'-]+)/i);
-    if (lastOnly) {
+    if (lastOnly && !STOPWORDS.has(lastOnly[1].toLowerCase())) {
       signals.push({ type: 'last_name', value: lastOnly[1] });
     }
 
     if (!firstOnly) {
       const tellMeAbout = query.match(/\b(?:about|for)\s+patient\s+([A-Za-z][A-Za-z'-]+)\b/i);
-      if (tellMeAbout) {
+      if (tellMeAbout && !STOPWORDS.has(tellMeAbout[1].toLowerCase())) {
         signals.push({ type: 'first_name', value: tellMeAbout[1] });
       }
     }

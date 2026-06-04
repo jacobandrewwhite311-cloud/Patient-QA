@@ -78,20 +78,30 @@ describe('PatientResolverService', () => {
     expect(result.method).toBe('explicit_full_name');
   });
 
-  it('priority 3: returns ambiguous for descriptive first name with multiple matches', async () => {
+  it('returns ambiguous (never guesses) when a bare first name has multiple matches', async () => {
     repo.findByFirstNameAndCohort.mockResolvedValue([
       { patientId: '1', firstName: 'Jean', lastName: 'A', cohort: 'A' },
       { patientId: '2', firstName: 'Jean', lastName: 'B', cohort: 'A' },
     ] as never);
+    repo.findByLastNameAndCohort.mockResolvedValue([] as never);
+
+    const result = await service.resolve('Tell me about Jean', 'A', context);
+    expect(result.status).toBe('ambiguous');
+    expect(result.method).toBe('single_name');
+    expect(result.matches?.length).toBe(2);
+    expect(result.patient).toBeUndefined();
+  });
+
+  it('priority 3: descriptive attribute search (gender) returns matches', async () => {
+    repo.findByGenderAndCohort.mockResolvedValue([
+      { patientId: '1', firstName: 'Ada', lastName: 'A', cohort: 'A' },
+    ] as never);
     repo.findByIdsAndCohort.mockResolvedValue([
-      { patientId: '1', firstName: 'Jean', lastName: 'A', cohort: 'A' },
-      { patientId: '2', firstName: 'Jean', lastName: 'B', cohort: 'A' },
+      { patientId: '1', firstName: 'Ada', lastName: 'A', cohort: 'A' },
     ] as never);
 
-    const result = await service.resolve('first name Jean', 'A', context);
-    expect(result.status).toBe('ambiguous');
+    const result = await service.resolve('show me a female patient', 'A', context);
     expect(result.method).toBe('descriptive_attributes');
-    expect(result.matches?.length).toBe(2);
   });
 
   it('priority 4: resolves from session last patient when query has no patient signals', async () => {
@@ -110,10 +120,31 @@ describe('PatientResolverService', () => {
     expect(result.patient?.patientId).toBe(patientId);
   });
 
-  it('priority 5: safe fallback when nothing matches and no full name detected', async () => {
-    const result = await service.resolve('What medications are they taking?', 'A', context);
+  it('priority 5: safe fallback when nothing matches and no name/pronoun/signal', async () => {
+    const result = await service.resolve('What is the latest dosage?', 'A', context);
     expect(result.status).toBe('not_found');
     expect(result.method).toBe('safe_fallback');
+  });
+
+  it('pronoun reference with no session context is reported as undeterminable', async () => {
+    const result = await service.resolve('What medications are they taking?', 'A', context);
+    expect(result.status).toBe('not_found');
+    expect(result.method).toBe('pronoun_unresolved');
+  });
+
+  it('resolves "Does Adolfo Ricker..." despite the leading verb (overlapping name pairs)', async () => {
+    repo.findByFullNameAndCohort.mockImplementation((first: string, last: string) =>
+      Promise.resolve(
+        first.toLowerCase() === 'adolfo' && last.toLowerCase() === 'ricker'
+          ? ([{ patientId: '1', firstName: 'Adolfo', lastName: 'Ricker', cohort: 'A' }] as never)
+          : ([] as never),
+      ),
+    );
+
+    const result = await service.resolve('Does Adolfo Ricker have any documented allergies?', 'A', context);
+    expect(result.status).toBe('resolved');
+    expect(result.method).toBe('explicit_full_name');
+    expect(result.patient?.firstName).toBe('Adolfo');
   });
 
   it('returns not_found for unknown explicit full name', async () => {

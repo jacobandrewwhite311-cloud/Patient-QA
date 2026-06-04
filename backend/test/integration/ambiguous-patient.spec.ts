@@ -16,7 +16,7 @@ describe('Ambiguous patient handling', () => {
         { patientId: '1', firstName: 'Jean', lastName: 'Berry', cohort: 'A' },
         { patientId: '2', firstName: 'Jean', lastName: 'Other', cohort: 'A' },
       ]),
-      findByLastNameAndCohort: jest.fn(),
+      findByLastNameAndCohort: jest.fn().mockResolvedValue([]),
       findByFullNameAndCohort: jest.fn(),
       findByIdAndCohort: jest.fn(),
       findByGenderAndCohort: jest.fn(),
@@ -44,7 +44,7 @@ describe('Ambiguous patient handling', () => {
       sessionId: 'cohort-A',
     });
     expect(result.status).toBe('ambiguous');
-    expect(result.method).toBe('descriptive_attributes');
+    expect(result.method).toBe('single_name');
     expect(result.matches?.length).toBe(2);
     expect(result.patient).toBeUndefined();
   });

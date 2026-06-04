@@ -28,8 +28,29 @@ export class PatientEntity {
   @Column({ type: 'varchar', length: 50, nullable: true })
   gender!: string | null;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  ethnicity!: string | null;
+
   @Column({ type: 'varchar', length: 50, nullable: true })
   status!: string | null;
+
+  @Column({ name: 'unit_description', type: 'varchar', length: 255, nullable: true })
+  unitDescription!: string | null;
+
+  @Column({ name: 'floor_description', type: 'varchar', length: 255, nullable: true })
+  floorDescription!: string | null;
+
+  @Column({ name: 'room_description', type: 'varchar', length: 255, nullable: true })
+  roomDescription!: string | null;
+
+  @Column({ name: 'bed_description', type: 'varchar', length: 255, nullable: true })
+  bedDescription!: string | null;
+
+  @Column({ name: 'admission_time', type: 'timestamptz', nullable: true })
+  admissionTime!: Date | null;
+
+  @Column({ name: 'discharge_time', type: 'timestamptz', nullable: true })
+  dischargeTime!: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

@@ -159,7 +159,7 @@ Runs automated evaluation suite and stores results in `evaluation_results`.
 
 | Table | Purpose |
 |-------|---------|
-| `patients` | Patient demographics with cohort |
+| `patients` | Patient demographics, location (unit/floor/room/bed) and admission/discharge, with cohort |
 | `patient_allergy` | Allergies (cohort denormalized) |
 | `patient_condition` | Conditions |
 | `patient_medication` | Medications |

@@ -7,18 +7,24 @@ import { v4 as uuidv4 } from 'uuid';
 import { EvaluationResultEntity } from '../database/entities';
 import { ChatService } from '../chat/chat.service';
 import { Cohort, ConfidenceLevel } from '../common/types';
+import { INJECTION_RESPONSES } from '../security/injection-detection.service';
+
+// Exact set of safe-denial messages a blocked request can return.
+const SECURITY_BLOCK_MESSAGES = new Set<string>(Object.values(INJECTION_RESPONSES));
 
 interface EvaluationCase {
   id: string;
   category: string;
   cohort: Cohort;
   message: string;
+  sessionId?: string;
   expectBlocked?: boolean;
   expectSecurityEvent?: boolean;
   expectCitations?: boolean;
   expectConfidenceMin?: ConfidenceLevel;
   expectInsufficient?: boolean;
   expectAmbiguousOrInsufficient?: boolean;
+  expectAnswerIncludes?: string[];
 }
 
 export interface EvaluationSummary {
@@ -62,7 +68,16 @@ export class EvaluationService {
     const byCategory: Record<string, { passed: number; total: number }> = {};
 
     for (const testCase of cases) {
-      const response = await this.chatService.handleMessage(testCase.message, testCase.cohort);
+      // Each case (or conversation) gets its own session so pronoun follow-ups
+      // resolve against the intended patient and unrelated cases never leak
+      // context into one another. Cases sharing a sessionId run as a dialogue
+      // in array order.
+      const sessionId = testCase.sessionId ?? `eval-${testCase.id}`;
+      const response = await this.chatService.handleMessage(
+        testCase.message,
+        testCase.cohort,
+        sessionId,
+      );
       const evaluation = this.evaluateCase(testCase, response);
 
       if (evaluation.passed) passed += 1;
@@ -117,10 +132,17 @@ export class EvaluationService {
       citations: unknown[];
       confidence: ConfidenceLevel;
       ambiguous?: boolean;
+      status?: string;
     },
   ) {
-    const blocked = /blocked for security reasons/i.test(response.answer);
-    const insufficient = /cannot find a matching patient/i.test(response.answer);
+    // Classify on the structured status (robust to AI-rephrased wording), with a
+    // message-based fallback for safety.
+    const blocked =
+      response.status === 'blocked' || SECURITY_BLOCK_MESSAGES.has(response.answer);
+    const insufficient =
+      response.status === 'not_found' ||
+      /cannot find a matching patient|cannot determine which patient/i.test(response.answer);
+    const ambiguous = response.status === 'ambiguous' || response.ambiguous === true;
 
     let passed = true;
     let notes = '';
@@ -137,7 +159,7 @@ export class EvaluationService {
       passed = false;
       notes += 'Expected insufficient evidence response. ';
     }
-    if (testCase.expectAmbiguousOrInsufficient && !response.ambiguous && !insufficient) {
+    if (testCase.expectAmbiguousOrInsufficient && !ambiguous && !insufficient) {
       passed = false;
       notes += 'Expected ambiguous or insufficient response. ';
     }
@@ -151,6 +173,16 @@ export class EvaluationService {
     ) {
       passed = false;
       notes += 'Confidence below minimum. ';
+    }
+    if (testCase.expectAnswerIncludes?.length) {
+      const answerLower = response.answer.toLowerCase();
+      const missing = testCase.expectAnswerIncludes.filter(
+        (needle) => !answerLower.includes(needle.toLowerCase()),
+      );
+      if (missing.length > 0) {
+        passed = false;
+        notes += `Answer missing expected content: ${missing.join(', ')}. `;
+      }
     }
 
     const securityBlock = testCase.expectBlocked ? blocked : !blocked;
