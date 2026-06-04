@@ -35,7 +35,7 @@ export const INSUFFICIENT_EVIDENCE_MESSAGE =
   'I cannot find a matching patient in your cohort, or I cannot answer this question based on the available records.';
 
 export const CANNOT_DETERMINE_PATIENT_MESSAGE =
-  'I cannot determine which patient you are referring to. Please specify a patient by full name or ID.';
+  'I cannot determine which patient you are referring to.';
 
 export const SAFE_SECURITY_RESPONSE =
   'Request denied. Access is restricted to authorized patient records within the active cohort.';

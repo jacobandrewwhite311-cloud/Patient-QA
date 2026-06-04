@@ -65,10 +65,21 @@ const STOPWORDS = new Set([
   'inactive', 'deceased', 'latest', 'recent', 'current',
 ]);
 
-/** Phrases that indicate the user is referring back to a previously discussed patient. */
-const PRONOUN_REFERENCE_PATTERNS: RegExp[] = [
+/**
+ * Plural / non-specific pronouns — never bind to session context (even after a
+ * named patient was discussed). Clinicians must name the patient or use he/she.
+ */
+const PLURAL_PRONOUN_PATTERNS: RegExp[] = [
+  /\b(?:they|them|their|theirs)\b/i,
+];
+
+/**
+ * Singular pronouns and explicit patient back-references — may resolve to the
+ * last patient in this session when no name or ID appears in the question.
+ */
+const SESSION_PRONOUN_PATTERNS: RegExp[] = [
   /\b(?:this|that|the)\s+patient\b/i,
-  /\b(?:he|she|they|him|her|them|his|hers|their|theirs)\b/i,
+  /\b(?:he|she|him|her|his|hers)\b/i,
 ];
 
 const UUID_REGEX =
@@ -111,12 +122,13 @@ export class PatientResolverService {
     const byFullName = await this.resolveByExplicitFullName(normalized, cohort);
     if (byFullName !== null) return byFullName;
 
-    // A pronoun reference ("this patient", "the patient", "their"...) is a
-    // follow-up about the patient already in context — resolve via session and
-    // do NOT fall through to attribute search (which would mis-read words like
-    // "active" or "currently" as search filters). With no session, the patient
-    // is genuinely undeterminable.
-    if (this.hasPronounReference(normalized)) {
+    // Plural pronouns (they/their/...) never inherit session — user must be explicit.
+    if (this.hasPluralPronounReference(normalized)) {
+      return { status: 'not_found', method: 'pronoun_unresolved' };
+    }
+
+    // Singular pronouns (he/she/...) or "this patient" may follow a prior named patient.
+    if (this.hasSessionPronounReference(normalized)) {
       const bySessionPronoun = await this.resolveBySessionContext(sessionLastPatientId, cohort);
       if (bySessionPronoun !== null) return bySessionPronoun;
       return { status: 'not_found', method: 'pronoun_unresolved' };
@@ -133,11 +145,49 @@ export class PatientResolverService {
     const bySession = await this.resolveBySessionContext(sessionLastPatientId, cohort);
     if (bySession !== null) return bySession;
 
+    if (this.lacksIdentifiablePatient(normalized)) {
+      return { status: 'not_found', method: 'pronoun_unresolved' };
+    }
+
     return { status: 'not_found', method: 'safe_fallback' };
   }
 
-  private hasPronounReference(query: string): boolean {
-    return PRONOUN_REFERENCE_PATTERNS.some((pattern) => pattern.test(query));
+  private hasPluralPronounReference(query: string): boolean {
+    return PLURAL_PRONOUN_PATTERNS.some((pattern) => pattern.test(query));
+  }
+
+  private hasSessionPronounReference(query: string): boolean {
+    return SESSION_PRONOUN_PATTERNS.some((pattern) => pattern.test(query));
+  }
+
+  /** Clinical question about a patient record with no name, ID, or session context. */
+  private isPatientScopedClinicalQuery(query: string): boolean {
+    return /\b(medication|medications|medicine|drugs?|prescription|allerg|condition|diagnos|observation|vitals?|room|bed|unit|floor|ward|admission|discharg|status|dosage|dob|birth|gender|ethnicity|blood\s*(?:sugar|pressure)|heart\s*rate|temperature|oxygen)\b/i.test(
+      query,
+    );
+  }
+
+  /**
+   * True when the user asks about patient-specific data but provides no way to
+   * identify which patient (no UUID, name tokens, or explicit name labels).
+   */
+  private lacksIdentifiablePatient(query: string): boolean {
+    if (UUID_REGEX.test(query)) return false;
+
+    if (this.extractExplicitFullNameCandidates(query).length > 0) return false;
+
+    const capitalizedNameTokens = this.nameTokens(query).filter(
+      (t) => this.isCapitalized(t.raw) && !STOPWORDS.has(t.clean.toLowerCase()),
+    );
+    if (capitalizedNameTokens.length > 0) return false;
+
+    const firstOnly = query.match(/(?:first\s+name|patient)\s+([A-Za-z][A-Za-z'-]+)/i);
+    if (firstOnly && !STOPWORDS.has(firstOnly[1].toLowerCase())) return false;
+
+    const lastOnly = query.match(/(?:last\s+name)\s+([A-Za-z][A-Za-z'-]+)/i);
+    if (lastOnly && !STOPWORDS.has(lastOnly[1].toLowerCase())) return false;
+
+    return this.hasPluralPronounReference(query) || this.isPatientScopedClinicalQuery(query);
   }
 
   /**

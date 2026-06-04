@@ -104,7 +104,7 @@ describe('PatientResolverService', () => {
     expect(result.method).toBe('descriptive_attributes');
   });
 
-  it('priority 4: resolves from session last patient when query has no patient signals', async () => {
+  it('priority 4: resolves he/she follow-ups from session last patient', async () => {
     const patientId = '9ec974ce-91d6-48e3-a8af-796c05348080';
     sessionContext.setLastPatientId('cohort-A', 'A', patientId);
     repo.findByIdAndCohort.mockResolvedValue({
@@ -114,20 +114,44 @@ describe('PatientResolverService', () => {
       cohort: 'A',
     } as never);
 
-    const result = await service.resolve('What medications are they taking?', 'A', context);
+    const result = await service.resolve('What allergies does he have?', 'A', context);
     expect(result.status).toBe('resolved');
     expect(result.method).toBe('session_context');
     expect(result.patient?.patientId).toBe(patientId);
   });
 
-  it('priority 5: safe fallback when nothing matches and no name/pronoun/signal', async () => {
+  it('does not bind they/their to session even after a named patient was discussed', async () => {
+    const patientId = '9ec974ce-91d6-48e3-a8af-796c05348080';
+    sessionContext.setLastPatientId('cohort-A', 'A', patientId);
+
+    const result = await service.resolve('What allergies do they have?', 'A', context);
+    expect(result.status).toBe('not_found');
+    expect(result.method).toBe('pronoun_unresolved');
+    expect(repo.findByIdAndCohort).not.toHaveBeenCalled();
+  });
+
+  it('priority 5: undeterminable when clinical question has no patient identity', async () => {
     const result = await service.resolve('What is the latest dosage?', 'A', context);
     expect(result.status).toBe('not_found');
-    expect(result.method).toBe('safe_fallback');
+    expect(result.method).toBe('pronoun_unresolved');
   });
 
   it('pronoun reference with no session context is reported as undeterminable', async () => {
     const result = await service.resolve('What medications are they taking?', 'A', context);
+    expect(result.status).toBe('not_found');
+    expect(result.method).toBe('pronoun_unresolved');
+  });
+
+  it('treats allergies and room pronoun questions as undeterminable without session', async () => {
+    const allergies = await service.resolve('What allergies do they have?', 'A', context);
+    expect(allergies.method).toBe('pronoun_unresolved');
+
+    const room = await service.resolve('What is their room number?', 'A', context);
+    expect(room.method).toBe('pronoun_unresolved');
+  });
+
+  it('treats vague clinical queries without a patient as undeterminable', async () => {
+    const result = await service.resolve('Show me the medications', 'A', context);
     expect(result.status).toBe('not_found');
     expect(result.method).toBe('pronoun_unresolved');
   });

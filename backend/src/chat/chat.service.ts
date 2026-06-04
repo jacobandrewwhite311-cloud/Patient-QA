@@ -113,13 +113,16 @@ export class ChatService {
     }
 
     if (resolution.status === 'not_found' || !resolution.patient) {
-      // A pronoun reference with no patient in context is a distinct case from
-      // "no such patient" — tell the user we cannot determine who they mean.
+      // A pronoun reference (or other patient-scoped question with no identity)
+      // and no session context is distinct from "named patient not found".
       const baseAnswer =
         resolution.method === 'pronoun_unresolved'
           ? CANNOT_DETERMINE_PATIENT_MESSAGE
           : INSUFFICIENT_EVIDENCE_MESSAGE;
-      const answer = await this.langChainService.refineAnswer(message, baseAnswer);
+      const answer =
+        resolution.method === 'pronoun_unresolved'
+          ? baseAnswer
+          : await this.langChainService.refineAnswer(message, baseAnswer);
 
       await this.auditService.logChat({
         requestId,
