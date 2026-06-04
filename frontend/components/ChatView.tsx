@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -8,10 +8,8 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
-import { router } from 'expo-router';
 import { sendChatMessage, ChatResponse } from '../lib/api';
 import { formatAnswerForDisplay } from '../lib/formatAnswer';
-import { clearSession, loadSession } from '../lib/session';
 
 function confidenceColor(confidence: string): string {
   if (confidence === 'High') return '#1b7f3b';
@@ -19,24 +17,17 @@ function confidenceColor(confidence: string): string {
   return '#b00020';
 }
 
-export default function ChatScreen() {
-  const [token, setToken] = useState<string | null>(null);
-  const [cohort, setCohort] = useState<'A' | 'B' | null>(null);
+interface ChatViewProps {
+  token: string;
+  cohort: 'A' | 'B';
+  onLogout: () => void;
+}
+
+export default function ChatView({ token, cohort, onLogout }: ChatViewProps) {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<ChatResponse | null>(null);
-
-  useEffect(() => {
-    loadSession().then((session) => {
-      if (!session) {
-        router.replace('/');
-        return;
-      }
-      setToken(session.token);
-      setCohort(session.cohort);
-    });
-  }, []);
 
   async function handleSend() {
     if (!token || !message.trim()) return;
@@ -50,19 +41,6 @@ export default function ChatScreen() {
     } finally {
       setLoading(false);
     }
-  }
-
-  async function handleLogout() {
-    await clearSession();
-    router.replace('/');
-  }
-
-  if (!token || !cohort) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator />
-      </View>
-    );
   }
 
   return (
@@ -81,7 +59,7 @@ export default function ChatScreen() {
         {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Send</Text>}
       </Pressable>
 
-      <Pressable style={styles.linkButton} onPress={handleLogout}>
+      <Pressable style={styles.linkButton} onPress={onLogout}>
         <Text style={styles.linkText}>Switch cohort</Text>
       </Pressable>
 
@@ -114,7 +92,6 @@ export default function ChatScreen() {
 
 const styles = StyleSheet.create({
   container: { padding: 16, gap: 12, backgroundColor: '#f7f7f7' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   meta: { fontSize: 14, color: '#555' },
   input: {
     borderWidth: 1,

@@ -1,6 +1,23 @@
 import { formatAnswerForDisplay } from './formatAnswer';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
+/**
+ * API base URL resolution:
+ * 1. EXPO_PUBLIC_API_URL if provided at build time (use this for Vercel, where
+ *    the frontend and backend are on different origins).
+ * 2. Otherwise, on web, the current origin — correct when the backend serves the
+ *    built web app itself (same host/port/protocol, so no CORS or mixed content).
+ * 3. Fallback to localhost for native/dev.
+ */
+function resolveApiUrl(): string {
+  const fromEnv = process.env.EXPO_PUBLIC_API_URL;
+  if (fromEnv) return fromEnv.replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return 'http://localhost:3000';
+}
+
+const API_URL = resolveApiUrl();
 
 export interface ChatResponse {
   answer: string;
