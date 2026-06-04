@@ -95,61 +95,23 @@ npm install
 EXPO_PUBLIC_API_URL=http://localhost:3000 npm start
 ```
 
-## Local Deployment
+## Public Deployment
 
-Run against a local PostgreSQL instance with environment variables from [`backend/.env.example`](backend/.env.example):
+| Service | URL |
+|---------|-----|
+| App (web) | [http://195.201.195.104:3000/](http://195.201.195.104:3000/) |
+| API base | `http://195.201.195.104:3000` |
+
+The web build is served from the same origin as the NestJS API, so the frontend resolves `EXPO_PUBLIC_API_URL` from `window.location.origin` automatically (see [`frontend/lib/api.ts`](frontend/lib/api.ts)). No separate frontend env var is required for this layout.
+
+Example API call:
 
 ```bash
-# Backend (production build)
-cd backend
-npm run build
-npm run start:prod
-
-# Frontend
-cd frontend
-EXPO_PUBLIC_API_URL=http://localhost:3000 npm start
+curl -X POST http://195.201.195.104:3000/cohort/select \
+  -H "Content-Type: application/json" \
+  -d '{"cohort":"A"}'
 ```
 
-Default ports:
-
-- PostgreSQL: `localhost:5432`
-- Backend API: `localhost:3000`
-- Frontend (Expo web): `localhost:8081`
-
-## API Endpoints
-
-### POST /cohort/select
-
-Select cohort and receive JWT.
-
-```json
-{ "cohort": "A" }
-```
-
-Response:
-
-```json
-{ "access_token": "<jwt>", "cohort": "A" }
-```
-
-### POST /chat
-
-Requires `Authorization: Bearer <token>`.
-
-```json
-{ "message": "What medications is Adolfo Ricker taking?" }
-```
-
-Response:
-
-```json
-{
-  "answer": "...",
-  "citations": [{ "table": "patient_medication", "record_id": "..." }],
-  "confidence": "High",
-  "request_id": "..."
-}
-```
 
 ### POST /evaluation/run
 
@@ -210,4 +172,4 @@ Metrics tracked: accuracy, grounding_rate, citation_rate, security_block_rate, c
 | `JWT_SECRET` | JWT signing secret |
 | `OPENAI_API_KEY` | OpenAI key (optional) |
 | `OPENAI_MODEL` | Default `gpt-4o-mini` |
-| `EXPO_PUBLIC_API_URL` | Frontend API base URL |
+| `EXPO_PUBLIC_API_URL` | Frontend API base URL (optional when web and API share one origin; set explicitly for split hosting, e.g. Vercel + separate API host) |
